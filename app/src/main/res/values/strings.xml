@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">XegPaper</string>
+    <string name="wallpaper_author">Xegster</string>
+    <string name="wallpaper_description">Geometric lines draw themselves across the screen and stop where they cross.</string>
+    <string name="wallpaper_settings_label">XegPaper settings</string>
+</resources>
