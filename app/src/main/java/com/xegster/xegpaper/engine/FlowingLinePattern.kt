@@ -43,6 +43,12 @@ class FlowingLinePattern(private val random: Random = Random.Default) : PatternG
         }
     }
 
+    private var debugColorIndex = 0
+    private val debugPalette = intArrayOf(
+        0xFFFF1744.toInt(), 0xFF2979FF.toInt(), 0xFF00E676.toInt(), 0xFFFFEA00.toInt(),
+        0xFFD500F9.toInt(), 0xFFFF6D00.toInt(), 0xFF00E5FF.toInt(), 0xFFFFFFFF.toInt(),
+    )
+
     private fun ensureSeeds(state: DrawState, config: WallpaperConfig) {
         while (growers.size < ACTIVE_SEED_COUNT && state.segments.size < config.maxSegments) {
             val spawn = perimeter.randomSpawnPoint(state)
@@ -53,7 +59,7 @@ class FlowingLinePattern(private val random: Random = Random.Default) : PatternG
                     startY = spawn[1],
                     baseAngle = spawn[2],
                     maxLengthDp = randomMaxLengthDp(state),
-                    color = config.lineColor,
+                    color = debugPalette[debugColorIndex++ % debugPalette.size],
                 ),
             )
         }

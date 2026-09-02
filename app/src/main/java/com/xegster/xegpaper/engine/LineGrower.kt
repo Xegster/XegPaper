@@ -19,9 +19,17 @@ import kotlin.random.Random
  * into a generic wander.
  *
  * Each bubble/blade's total turn is capped well short of 180 degrees (see
- * [BUBBLE_TURN_MAX_DEG]), so the curve can bend into a round bump but can never wind
- * back far enough to face — let alone cross — its own earlier path. The line must only
- * ever stop by touching *other* geometry or the canvas edge, never itself.
+ * [BUBBLE_TURN_MAX_DEG]) as a first line of defense, but that alone is not enough: two
+ * consecutive loops curling in opposite directions can still cross each other even
+ * though neither one individually turns anywhere near a full circle. So every chord —
+ * whatever produced its heading, including the exit-steering blend near max length,
+ * which otherwise could point straight back through the line's own tangle — passes
+ * through [safeHeading], which nudges it away from anything within [SELF_CLEARANCE_DP]
+ * of an *earlier* stretch of this same line. That is what actually guarantees the line
+ * can only ever stop by touching *other* geometry or the canvas edge, never itself; the
+ * plain crossing check in [advance] (which does not exclude this line's own segments)
+ * is only the last-resort backstop for the practically-impossible case of a heading
+ * blocked in every direction.
  *
  * The line is drawn as many short straight chords with a slightly different heading
  * each time; consecutive chords share an exact vertex rather than a tolerance match,
@@ -45,14 +53,14 @@ class LineGrower(
     private val random = random
     private val noise = PerlinNoise(random)
 
-    /** This line's own segments, excluded only from [nearestExitPoint]'s search for the
-     *  nearest *other* thing to steer toward as the line approaches its max length —
-     *  otherwise a point on the line's own tail would trivially "win" at distance zero.
-     *  This does not affect termination: crossing any segment, including this line's
-     *  own, still stops it (see [advance]). A [HashSet] keyed by identity (see
-     *  [LineSegment]) keeps the lookup O(1) even for a long line. */
-    private val ownSegments = HashSet<LineSegment>()
-    private var lastSegment: LineSegment? = null
+    /** This line's own segments in growth order. Used two ways: [nearestExitPoint]
+     *  excludes all of them (a point on the line's own tail would otherwise trivially
+     *  "win" at distance zero), while [wouldApproachOwnPath] checks the *earlier* ones
+     *  (everything but the trailing [SELF_CHECK_EXCLUDE_RECENT] segments, which are
+     *  naturally close to the head by construction) to keep the line from curling back
+     *  into itself. Crossing any segment, including this line's own, still stops it
+     *  outright (see [advance]) as a last-resort safety net. */
+    private val ownSegments = ArrayList<LineSegment>()
 
     private var headX = startX
     private var headY = startY
@@ -92,14 +100,14 @@ class LineGrower(
     }
 
     private fun beginChord(state: DrawState) {
-        advancePhase()
-        chordAngle = headingFor(state)
+        advancePhase(state)
+        chordAngle = safeHeading(state, headingFor(state))
         chordRemainingPx = CHORD_DP * state.density
     }
 
     /** Advances the bubble/blade/neck state machine by one chord's worth of distance,
      *  updating [currentHeading] to match. */
-    private fun advancePhase() {
+    private fun advancePhase(state: DrawState) {
         when (phase) {
             Phase.NECK -> {
                 neckRemainingDp -= CHORD_DP
@@ -114,7 +122,15 @@ class LineGrower(
                     val t = (bladeTraveledDp / bladeLengthDp).coerceAtMost(1f)
                     loopCurvaturePerDp * (1f - t) * CHORD_DP
                 }
-                currentHeading += turnThisChord * loopDirection
+                val candidateHeading = currentHeading + turnThisChord * loopDirection
+                if (wouldApproachOwnPath(state, candidateHeading)) {
+                    // Continuing to curl would bring this chord too close to an earlier
+                    // stretch of the same line — cut the loop short instead of risking
+                    // a self-crossing.
+                    startNeck()
+                    return
+                }
+                currentHeading = candidateHeading
                 if (isBubble) {
                     loopTurnRemainingRadians -= turnThisChord
                     if (loopTurnRemainingRadians <= 0f) startNeck()
@@ -124,6 +140,54 @@ class LineGrower(
                 }
             }
         }
+    }
+
+    /** Whether the next chord, drawn at [candidateHeading], would come within
+     *  [SELF_CLEARANCE_DP] of a stretch of this same line more than
+     *  [SELF_CHECK_EXCLUDE_RECENT] segments back. The trailing segments are excluded
+     *  because a curling loop is naturally within a radius's distance of its own last
+     *  few chords — that is not a risk, only an approach to genuinely *earlier* geometry
+     *  is. Checked at the chord's midpoint as well as its end, so a short chord cannot
+     *  graze past an old segment that neither endpoint alone gets close enough to. */
+    private fun wouldApproachOwnPath(state: DrawState, candidateHeading: Float): Boolean {
+        val safeCount = ownSegments.size - SELF_CHECK_EXCLUDE_RECENT
+        if (safeCount <= 0) return false
+        val chordPx = CHORD_DP * state.density
+        val lookaheadX = headX + cos(candidateHeading) * chordPx
+        val lookaheadY = headY + sin(candidateHeading) * chordPx
+        val midX = (headX + lookaheadX) / 2f
+        val midY = (headY + lookaheadY) / 2f
+        val clearancePx = SELF_CLEARANCE_DP * state.density
+        for (index in 0 until safeCount) {
+            val segment = ownSegments[index]
+            if (IntersectionDetector.distanceToSegment(segment, lookaheadX, lookaheadY) < clearancePx ||
+                IntersectionDetector.distanceToSegment(segment, midX, midY) < clearancePx
+            ) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /** Last-resort gate applied to every chord regardless of what produced it (loop
+     *  curvature, a straight neck, or the exit-steering blend near max length): if
+     *  [desired] would approach this line's own earlier path, rotate it in increasing
+     *  10-degree steps, alternating sides, until a clear direction is found. This is
+     *  what keeps *exit-steering* honest too — without it, heading straight for the
+     *  nearest edge or line could cut straight back through a tangle of this line's own
+     *  earlier loops. If literally every direction is blocked (the head is boxed in by
+     *  its own path on all sides — vanishingly rare), [desired] is returned as-is and
+     *  the hard crossing check in [advance] is the final backstop. */
+    private fun safeHeading(state: DrawState, desired: Float): Float {
+        if (!wouldApproachOwnPath(state, desired)) return desired
+        for (step in 1..18) {
+            val delta = Math.toRadians((step * 10).toDouble()).toFloat()
+            val plus = desired + delta
+            if (!wouldApproachOwnPath(state, plus)) return plus
+            val minus = desired - delta
+            if (!wouldApproachOwnPath(state, minus)) return minus
+        }
+        return desired
     }
 
     private fun startNewLoop() {
@@ -233,7 +297,6 @@ class LineGrower(
         val segment = LineSegment(headX, headY, endX, endY, color)
         state.segments.add(segment)
         ownSegments.add(segment)
-        lastSegment = segment
         headX = endX
         headY = endY
         val consumed = step * fraction
@@ -245,10 +308,10 @@ class LineGrower(
         active = false
         // A line that stopped the moment it started leaves a zero-length stub behind,
         // which would render as a stray dot.
-        val last = lastSegment ?: return
+        val last = ownSegments.lastOrNull() ?: return
         if (abs(last.endX - last.startX) < DEGENERATE_PX && abs(last.endY - last.startY) < DEGENERATE_PX) {
             state.segments.remove(last)
-            ownSegments.remove(last)
+            ownSegments.removeAt(ownSegments.size - 1)
         }
     }
 
@@ -312,6 +375,16 @@ class LineGrower(
         /** Chance consecutive loops curl in opposite directions, so the line snakes
          *  back and forth rather than spiraling in on itself. */
         const val LOOP_FLIP_PROBABILITY = 0.65f
+
+        /** Minimum distance, in dp, a looping chord must keep from any earlier stretch
+         *  of this same line (see [wouldApproachOwnPath]). */
+        const val SELF_CLEARANCE_DP = 20f
+
+        /** How many of this line's own trailing segments [wouldApproachOwnPath] ignores
+         *  — comfortably more than one full bubble+neck cycle's worth of chords, so the
+         *  check only ever looks at genuinely earlier geometry, not the loop currently
+         *  in progress. */
+        const val SELF_CHECK_EXCLUDE_RECENT = 40
 
         /** Fraction of [maxLengthDp] at which heading starts blending toward
          *  [nearestExitPoint] instead of following the loop/neck state machine. */

@@ -9,3 +9,7 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Scratch screenshots/artifacts generated while testing changes (not source material —
+# reference images belong in Resources/ instead).
+/.claude-test/
