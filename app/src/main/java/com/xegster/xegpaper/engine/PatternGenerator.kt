@@ -22,7 +22,12 @@ enum class PatternType {
     ANGULAR,
 
     /** Spokes fired one at a time from an anchor point, sweeping around it. */
-    RADIAL;
+    RADIAL,
+
+    /** Several curves grow at once from the outer perimeter — canvas edges plus lines
+     *  already drawn — wandering under Perlin-noise steering and stopping exactly
+     *  where they cross existing geometry or the edge. */
+    FLOWING;
 
     companion object {
         fun fromNameOrDefault(name: String?): PatternType =
@@ -33,4 +38,5 @@ enum class PatternType {
 fun createPatternGenerator(type: PatternType): PatternGenerator = when (type) {
     PatternType.ANGULAR -> GeometricLinePattern()
     PatternType.RADIAL -> RadialBurstPattern()
+    PatternType.FLOWING -> FlowingLinePattern()
 }

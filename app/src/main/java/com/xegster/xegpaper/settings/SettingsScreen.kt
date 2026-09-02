@@ -116,7 +116,10 @@ fun SettingsScreen(
             }
 
             SettingSection(title = "Pattern") {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                     PatternType.entries.forEach { pattern ->
                         FilterChip(
                             selected = config.patternType == pattern,
@@ -297,6 +300,7 @@ private val PatternType.displayName: String
     get() = when (this) {
         PatternType.ANGULAR -> "Angular walk"
         PatternType.RADIAL -> "Radial burst"
+        PatternType.FLOWING -> "Flowing curves"
     }
 
 private val PatternType.description: String
@@ -306,4 +310,7 @@ private val PatternType.description: String
 
         PatternType.RADIAL ->
             "Spokes fire one at a time from a moving anchor, each clipped by the lines already drawn."
+
+        PatternType.FLOWING ->
+            "Curves swell into round bubbles and pinch into pointed blades, seeded from the canvas edge and the lines already drawn, each stopping exactly where it meets existing geometry."
     }

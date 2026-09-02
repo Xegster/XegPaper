@@ -91,11 +91,12 @@ abstract class GrowingLinePattern(protected val random: Random = Random.Default)
         y: Float,
         angle: Float,
         runLength: Float,
+        color: Int = config.lineColor,
     ) {
         headX = x
         headY = y
         drawing = true
-        beginSegment(state, config, angle, runLength)
+        beginSegment(state, config, angle, runLength, color)
     }
 
     /** Turns the current line: starts a fresh segment from the head along [angle]. */
@@ -104,10 +105,11 @@ abstract class GrowingLinePattern(protected val random: Random = Random.Default)
         config: WallpaperConfig,
         angle: Float,
         runLength: Float,
+        color: Int = config.lineColor,
     ) {
         angleRadians = angle
         runRemaining = runLength
-        val segment = LineSegment(headX, headY, headX, headY, config.lineColor)
+        val segment = LineSegment(headX, headY, headX, headY, color)
         state.segments.add(segment)
         current = segment
     }

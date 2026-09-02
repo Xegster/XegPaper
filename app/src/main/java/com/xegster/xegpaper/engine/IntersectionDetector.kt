@@ -107,4 +107,16 @@ object IntersectionDetector {
         }
         return nearest
     }
+
+    /** Point on [segment] closest to ([px], [py]). */
+    fun closestPointOnSegment(segment: LineSegment, px: Float, py: Float): FloatArray {
+        val dx = segment.endX - segment.startX
+        val dy = segment.endY - segment.startY
+        val lengthSquared = dx * dx + dy * dy
+        if (lengthSquared < EPSILON) return floatArrayOf(segment.startX, segment.startY)
+
+        val t = (((px - segment.startX) * dx + (py - segment.startY) * dy) / lengthSquared)
+            .coerceIn(0f, 1f)
+        return floatArrayOf(segment.startX + dx * t, segment.startY + dy * t)
+    }
 }
