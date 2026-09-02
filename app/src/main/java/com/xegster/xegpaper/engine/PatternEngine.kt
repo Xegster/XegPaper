@@ -4,7 +4,9 @@ import android.graphics.Canvas
 
 /**
  * Owns a composition: the surface metrics, the active [PatternGenerator], the frame
- * clock, and the fade-and-restart cycle that runs once the canvas fills up.
+ * clock, and the fade-and-restart cycle that runs once the canvas fills up — delayed
+ * until [PatternGenerator.isSettled] so a still-growing line finishes on its own
+ * (another line or the canvas edge) instead of being cut off mid-curve.
  *
  * Both the wallpaper service and the in-app preview drive one of these — they only
  * have to feed it a size, a frame timestamp, and a canvas.
@@ -73,8 +75,13 @@ class PatternEngine(initialConfig: WallpaperConfig = WallpaperConfig.DEFAULT) {
         }
 
         if (state.segments.size >= config.maxSegments) {
-            state.fading = true
-            return
+            if (generator.isSettled()) {
+                android.util.Log.d("XegPaperDebug", "CANVAS FULL + settled, fading at segments=${state.segments.size}, maxSegments=${config.maxSegments}")
+                state.fading = true
+                return
+            } else {
+                android.util.Log.d("XegPaperDebug", "CANVAS FULL but NOT settled, letting active growth finish, segments=${state.segments.size}")
+            }
         }
 
         generator.update(state, config, deltaSeconds)

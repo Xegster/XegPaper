@@ -18,18 +18,18 @@ import kotlin.random.Random
  * overall shape, which is why the bubbles and blades read clearly instead of dissolving
  * into a generic wander.
  *
- * Each bubble/blade's total turn is capped well short of 180 degrees (see
- * [BUBBLE_TURN_MAX_DEG]) as a first line of defense, but that alone is not enough: two
- * consecutive loops curling in opposite directions can still cross each other even
- * though neither one individually turns anywhere near a full circle. So every chord —
- * whatever produced its heading, including the exit-steering blend near max length,
- * which otherwise could point straight back through the line's own tangle — passes
- * through [safeHeading], which nudges it away from anything within [SELF_CLEARANCE_DP]
- * of an *earlier* stretch of this same line. That is what actually guarantees the line
- * can only ever stop by touching *other* geometry or the canvas edge, never itself; the
- * plain crossing check in [advance] (which does not exclude this line's own segments)
- * is only the last-resort backstop for the practically-impossible case of a heading
- * blocked in every direction.
+ * A bubble's total turn (see [BUBBLE_TURN_MAX_DEG]) is most of a full loop, so it reads
+ * as a round bump rather than a shallow curve — capping the angle is *not* what keeps
+ * it from crossing itself, though: two consecutive loops curling in opposite directions
+ * can cross each other even when neither individually turns anywhere near a full
+ * circle. So every chord — whatever produced its heading, including the exit-steering
+ * blend near max length, which otherwise could point straight back through the line's
+ * own tangle — passes through [safeHeading], which nudges it away from anything within
+ * [SELF_CLEARANCE_DP] of an *earlier* stretch of this same line. That is what actually
+ * guarantees the line can only ever stop by touching *other* geometry or the canvas
+ * edge, never itself; the plain crossing check in [advance] (which does not exclude
+ * this line's own segments) is only the last-resort backstop for the
+ * practically-impossible case of a heading blocked in every direction.
  *
  * The line is drawn as many short straight chords with a slightly different heading
  * each time; consecutive chords share an exact vertex rather than a tolerance match,
@@ -286,6 +286,17 @@ class LineGrower(
             }
         }
 
+        if (terminates && crossT != null && (edgeT == null || crossT <= edgeT)) {
+            val isSelf = ownSegments.any { seg ->
+                IntersectionDetector.crossFraction(
+                    headX, headY, nextX, nextY, seg.startX, seg.startY, seg.endX, seg.endY, MIN_CROSS_FRACTION,
+                ) == crossT
+            }
+            android.util.Log.d("XegPaperDebug", "TERMINATE via crossing, selfCrossing=$isSelf, ownSegCount=${ownSegments.size}, dist=$distanceTraveledDp, maxLen=$maxLengthDp")
+        } else if (terminates) {
+            android.util.Log.d("XegPaperDebug", "TERMINATE via canvas edge, ownSegCount=${ownSegments.size}, dist=$distanceTraveledDp, maxLen=$maxLengthDp")
+        }
+
         val consumed = moveHeadAndAppend(state, nextX, nextY, fraction, step)
         if (terminates) finish(state)
         return consumed
@@ -347,12 +358,12 @@ class LineGrower(
         /** Chance a loop curls into a round bubble bump rather than a tapering blade. */
         const val BUBBLE_PROBABILITY = 0.5f
 
-        /** Total turn for a bubble bump. Capped well under 180 degrees — a half-turn is
-         *  the point where the head would face directly back the way it came — so even
-         *  with the radius range and noise jitter below, the curve cannot wind back far
-         *  enough to threaten its own earlier path. */
-        const val BUBBLE_TURN_MIN_DEG = 80f
-        const val BUBBLE_TURN_MAX_DEG = 150f
+        /** Total turn for a bubble bump — most of a full loop, so it reads as a round
+         *  bubble rather than a shallow curve. Safe to push this close to 360 degrees
+         *  because [safeHeading] (not this angle) is what actually guarantees the line
+         *  never crosses itself. */
+        const val BUBBLE_TURN_MIN_DEG = 200f
+        const val BUBBLE_TURN_MAX_DEG = 300f
 
         /** Distance over which a blade's curvature decays to zero, turning a curl into
          *  a straightening, pointed hook. Its cumulative turn is half of what constant

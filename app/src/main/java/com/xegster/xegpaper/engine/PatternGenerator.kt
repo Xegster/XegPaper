@@ -15,6 +15,20 @@ interface PatternGenerator {
 
     /** Advances the drawing by [deltaSeconds] worth of movement. */
     fun update(state: DrawState, config: WallpaperConfig, deltaSeconds: Float)
+
+    /**
+     * Whether the pattern has nothing left actively growing, so [PatternEngine] can
+     * safely fade out once [DrawState.segments] reaches the configured density cap.
+     *
+     * Defaults to true (fade the instant the cap is hit) because that is correct for a
+     * pattern like [GrowingLinePattern] that always immediately starts a new line the
+     * moment one finishes — there is no "settling" point short of a hard cutoff.
+     * [FlowingLinePattern] overrides this: it stops *spawning* new seeds at the cap but
+     * lets its already-growing ones keep going, so cutting them off mid-curve would
+     * produce exactly the "stops in the middle of nowhere" look the cap is meant to
+     * avoid. Reported once per frame, not consulted mid-[update].
+     */
+    fun isSettled(): Boolean = true
 }
 
 enum class PatternType {
