@@ -21,3 +21,10 @@ for the build/install steps, the module layout, and how to add a pattern.
   Android Studio's JBR.
 - AndroidX versions are pinned to the AGP 8.x / compileSdk 36 generation. Newer
   releases demand AGP 9.x and compileSdk 37; bumping them means bumping all three.
+- A **scythe** is half of a crescent moon. A crescent (see `ScytheLinePattern`) is two
+  circular arcs — an outer one and a shallower inner one — meeting at two sharp "horn"
+  points. Cut it through the midpoint of each arc and keep one half: it keeps exactly
+  one horn as a sharp tip, and its other end is left open as two "base" points where
+  the cut was made, instead of closing into a second horn. `ScytheGeometry` builds this
+  shape; `ScytheBubblePattern` sprouts scythes as thorns off a growing bubble curve,
+  and `MultiScythePattern` chains them base-to-base into a zigzag.
