@@ -108,6 +108,27 @@ object IntersectionDetector {
         return nearest
     }
 
+    /**
+     * Shortest distance between segment `a -> b` and [segment] — zero if they cross.
+     *
+     * Sampling only a chord's endpoint (or midpoint) against another segment can miss
+     * the true closest approach, which may fall anywhere along either segment; this is
+     * the standard exact method instead — the minimum is always achieved either at one
+     * of the four endpoints, or (if the segments cross) at the crossing point itself.
+     */
+    fun distanceBetweenSegments(ax: Float, ay: Float, bx: Float, by: Float, segment: LineSegment): Float {
+        if (crossFraction(ax, ay, bx, by, segment.startX, segment.startY, segment.endX, segment.endY) != null) {
+            return 0f
+        }
+        val chord = LineSegment(ax, ay, bx, by, 0)
+        return minOf(
+            distanceToSegment(segment, ax, ay),
+            distanceToSegment(segment, bx, by),
+            distanceToSegment(chord, segment.startX, segment.startY),
+            distanceToSegment(chord, segment.endX, segment.endY),
+        )
+    }
+
     /** Point on [segment] closest to ([px], [py]). */
     fun closestPointOnSegment(segment: LineSegment, px: Float, py: Float): FloatArray {
         val dx = segment.endX - segment.startX

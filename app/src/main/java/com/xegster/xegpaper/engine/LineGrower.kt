@@ -18,18 +18,19 @@ import kotlin.random.Random
  * overall shape, which is why the bubbles and blades read clearly instead of dissolving
  * into a generic wander.
  *
- * A bubble's total turn (see [BUBBLE_TURN_MAX_DEG]) is most of a full loop, so it reads
+ * A bubble's total turn (see [Style.bubbleTurnMaxDeg]) is most of a full loop, so it reads
  * as a round bump rather than a shallow curve — capping the angle is *not* what keeps
  * it from crossing itself, though: two consecutive loops curling in opposite directions
  * can cross each other even when neither individually turns anywhere near a full
  * circle. So every chord — whatever produced its heading, including the exit-steering
  * blend near max length, which otherwise could point straight back through the line's
  * own tangle — passes through [safeHeading], which nudges it away from anything within
- * [SELF_CLEARANCE_DP] of an *earlier* stretch of this same line. That is what actually
- * guarantees the line can only ever stop by touching *other* geometry or the canvas
- * edge, never itself; the plain crossing check in [advance] (which does not exclude
- * this line's own segments) is only the last-resort backstop for the
- * practically-impossible case of a heading blocked in every direction.
+ * [SELF_CLEARANCE_DP] of an *earlier* stretch of this same line. When [safeHeading]
+ * finds no clear direction at all — the head boxed in by its own path on every side,
+ * which can still happen after enough tightly-wound loops — [step] stops the line right
+ * there rather than drawing the only heading left. Between the nudge and that hard
+ * stop, the line can only ever end by touching *other* geometry or the canvas edge,
+ * never itself.
  *
  * The line is drawn as many short straight chords with a slightly different heading
  * each time; consecutive chords share an exact vertex rather than a tolerance match,
@@ -49,18 +50,29 @@ class LineGrower(
     private val baseAngle: Float,
     private val maxLengthDp: Float,
     private val color: Int,
+    private val style: Style = Style.FLOWING,
 ) {
     private val random = random
     private val noise = PerlinNoise(random)
 
     /** This line's own segments in growth order. Used two ways: [nearestExitPoint]
      *  excludes all of them (a point on the line's own tail would otherwise trivially
-     *  "win" at distance zero), while [wouldApproachOwnPath] checks the *earlier* ones
-     *  (everything but the trailing [SELF_CHECK_EXCLUDE_RECENT] segments, which are
-     *  naturally close to the head by construction) to keep the line from curling back
-     *  into itself. Crossing any segment, including this line's own, still stops it
-     *  outright (see [advance]) as a last-resort safety net. */
+     *  "win" at distance zero), while [wouldApproachOwnPath] checks the *earlier* ones —
+     *  everything before [recentWindowStart] — to keep the line from curling back into
+     *  itself. */
     private val ownSegments = ArrayList<LineSegment>()
+
+    /** Index of the oldest segment still within [SELF_CHECK_EXCLUDE_RECENT_DP] of the
+     *  head, measured along the drawn path (not segment *count* — see
+     *  [updateRecentWindow] for why that distinction matters). Segments from this index
+     *  onward are "recent" and excluded from [wouldApproachOwnPath]; everything before
+     *  it is fair game to check. */
+    private var recentWindowStart = 0
+
+    /** Sum of segment lengths (px) from [recentWindowStart] to the most recent segment —
+     *  kept incrementally in [updateRecentWindow] so finding the window is O(1)
+     *  amortized instead of re-summing from the tail on every check. */
+    private var recentWindowLengthPx = 0f
 
     private var headX = startX
     private var headY = startY
@@ -82,13 +94,47 @@ class LineGrower(
     var active = true
         private set
 
+    /** Current tip position and heading, in surface pixels/radians. Lets a pattern
+     *  spawn new growth from a growing line's own tip instead of only from the
+     *  perimeter — see [BloomPattern]. */
+    val tipX: Float get() = headX
+    val tipY: Float get() = headY
+    val tipHeading: Float get() = currentHeading
+
+    /**
+     * Moves the head to ([x], [y]) heading [heading] and starts a fresh neck from
+     * there, as if this grower had just finished an ordinary chord — without drawing
+     * anything itself. For a pattern that draws other geometry (like a scythe) into
+     * the same path and then hands growth back to this grower from where that
+     * geometry ended, so the whole thing reads as one continuous line instead of two
+     * disconnected pieces — see [ScytheBubblePattern]. [travelledDp] is added to this
+     * grower's own travelled distance, so the detour still counts against
+     * [maxLengthDp] and the exit-steering in [headingFor] still kicks in on schedule.
+     */
+    fun warpTo(x: Float, y: Float, heading: Float, travelledDp: Float) {
+        headX = x
+        headY = y
+        currentHeading = heading
+        chordRemainingPx = 0f
+        distanceTraveledDp += travelledDp
+        startNeck()
+    }
+
     /** Advances up to [budgetPx] worth of drawing, stopping early if the line
      *  terminates. Returns the px actually consumed. */
     fun step(state: DrawState, budgetPx: Float): Float {
         var remaining = budgetPx
         var consumedTotal = 0f
         while (remaining > 0f && active) {
-            if (chordRemainingPx <= 0f) beginChord(state)
+            if (chordRemainingPx <= 0f && !beginChord(state)) {
+                // Boxed in on every side by this line's own earlier path, with no
+                // heading left that doesn't approach it — see [safeHeading]. Stopping
+                // here, without drawing this chord, is what makes "never crosses
+                // itself" an absolute guarantee rather than just the common case.
+                android.util.Log.d("XegPaperDebug", "TERMINATE via boxed-in safety valve, ownSegCount=${ownSegments.size}, dist=$distanceTraveledDp, maxLen=$maxLengthDp")
+                finish(state)
+                break
+            }
             val subStep = min(remaining, chordRemainingPx)
             if (subStep <= 0f) break
             val consumed = advance(state, subStep)
@@ -99,10 +145,14 @@ class LineGrower(
         return consumedTotal
     }
 
-    private fun beginChord(state: DrawState) {
+    /** Starts the next chord. Returns false (leaving [chordRemainingPx] at 0) if no
+     *  heading is safe to draw at all. */
+    private fun beginChord(state: DrawState): Boolean {
         advancePhase(state)
-        chordAngle = safeHeading(state, headingFor(state))
+        val safe = safeHeading(state, headingFor(state)) ?: return false
+        chordAngle = safe
         chordRemainingPx = CHORD_DP * state.density
+        return true
     }
 
     /** Advances the bubble/blade/neck state machine by one chord's worth of distance,
@@ -144,27 +194,24 @@ class LineGrower(
 
     /** Whether the next chord, drawn at [candidateHeading], would come within
      *  [SELF_CLEARANCE_DP] of a stretch of this same line more than
-     *  [SELF_CHECK_EXCLUDE_RECENT] segments back. The trailing segments are excluded
+     *  [SELF_CHECK_EXCLUDE_RECENT_DP] *of path distance* back (see
+     *  [recentWindowStart]/[updateRecentWindow]) — the trailing stretch is excluded
      *  because a curling loop is naturally within a radius's distance of its own last
-     *  few chords — that is not a risk, only an approach to genuinely *earlier* geometry
-     *  is. Checked at the chord's midpoint as well as its end, so a short chord cannot
-     *  graze past an old segment that neither endpoint alone gets close enough to. */
+     *  bit of path; that is not a risk, only an approach to genuinely *earlier*
+     *  geometry is. Uses the exact segment-to-segment distance (see
+     *  [IntersectionDetector.distanceBetweenSegments]) rather than sampling a couple of
+     *  points along the chord, which could pass an old segment closely enough to
+     *  actually cross it without either sampled point being the closest approach. */
     private fun wouldApproachOwnPath(state: DrawState, candidateHeading: Float): Boolean {
-        val safeCount = ownSegments.size - SELF_CHECK_EXCLUDE_RECENT
-        if (safeCount <= 0) return false
+        if (recentWindowStart <= 0) return false
         val chordPx = CHORD_DP * state.density
         val lookaheadX = headX + cos(candidateHeading) * chordPx
         val lookaheadY = headY + sin(candidateHeading) * chordPx
-        val midX = (headX + lookaheadX) / 2f
-        val midY = (headY + lookaheadY) / 2f
         val clearancePx = SELF_CLEARANCE_DP * state.density
-        for (index in 0 until safeCount) {
+        for (index in 0 until recentWindowStart) {
             val segment = ownSegments[index]
-            if (IntersectionDetector.distanceToSegment(segment, lookaheadX, lookaheadY) < clearancePx ||
-                IntersectionDetector.distanceToSegment(segment, midX, midY) < clearancePx
-            ) {
-                return true
-            }
+            val d = IntersectionDetector.distanceBetweenSegments(headX, headY, lookaheadX, lookaheadY, segment)
+            if (d < clearancePx) return true
         }
         return false
     }
@@ -175,10 +222,10 @@ class LineGrower(
      *  10-degree steps, alternating sides, until a clear direction is found. This is
      *  what keeps *exit-steering* honest too — without it, heading straight for the
      *  nearest edge or line could cut straight back through a tangle of this line's own
-     *  earlier loops. If literally every direction is blocked (the head is boxed in by
-     *  its own path on all sides — vanishingly rare), [desired] is returned as-is and
-     *  the hard crossing check in [advance] is the final backstop. */
-    private fun safeHeading(state: DrawState, desired: Float): Float {
+     *  earlier loops. Returns null if literally every direction is blocked — the head
+     *  boxed in by its own path on all sides, which [step] treats as a hard stop rather
+     *  than falling through to an actual self-crossing. */
+    private fun safeHeading(state: DrawState, desired: Float): Float? {
         if (!wouldApproachOwnPath(state, desired)) return desired
         for (step in 1..18) {
             val delta = Math.toRadians((step * 10).toDouble()).toFloat()
@@ -187,26 +234,26 @@ class LineGrower(
             val minus = desired - delta
             if (!wouldApproachOwnPath(state, minus)) return minus
         }
-        return desired
+        return null
     }
 
     private fun startNewLoop() {
-        isBubble = random.nextFloat() < BUBBLE_PROBABILITY
-        val radiusDp = LOOP_RADIUS_MIN_DP + random.nextFloat() * (LOOP_RADIUS_MAX_DP - LOOP_RADIUS_MIN_DP)
+        isBubble = random.nextFloat() < style.bubbleProbability
+        val radiusDp = style.loopRadiusMinDp + random.nextFloat() * (style.loopRadiusMaxDp - style.loopRadiusMinDp)
         loopCurvaturePerDp = 1f / radiusDp
         if (isBubble) {
-            val turnDegrees = BUBBLE_TURN_MIN_DEG + random.nextFloat() * (BUBBLE_TURN_MAX_DEG - BUBBLE_TURN_MIN_DEG)
+            val turnDegrees = style.bubbleTurnMinDeg + random.nextFloat() * (style.bubbleTurnMaxDeg - style.bubbleTurnMinDeg)
             loopTurnRemainingRadians = Math.toRadians(turnDegrees.toDouble()).toFloat()
         } else {
-            bladeLengthDp = BLADE_LENGTH_MIN_DP + random.nextFloat() * (BLADE_LENGTH_MAX_DP - BLADE_LENGTH_MIN_DP)
+            bladeLengthDp = style.bladeLengthMinDp + random.nextFloat() * (style.bladeLengthMaxDp - style.bladeLengthMinDp)
             bladeTraveledDp = 0f
         }
-        if (random.nextFloat() < LOOP_FLIP_PROBABILITY) loopDirection = -loopDirection
+        if (random.nextFloat() < style.loopFlipProbability) loopDirection = -loopDirection
         phase = Phase.LOOP
     }
 
     private fun startNeck() {
-        neckRemainingDp = NECK_MIN_DP + random.nextFloat() * (NECK_MAX_DP - NECK_MIN_DP)
+        neckRemainingDp = style.neckMinDp + random.nextFloat() * (style.neckMaxDp - style.neckMinDp)
         phase = Phase.NECK
     }
 
@@ -308,11 +355,33 @@ class LineGrower(
         val segment = LineSegment(headX, headY, endX, endY, color)
         state.segments.add(segment)
         ownSegments.add(segment)
+        updateRecentWindow(state, segment)
         headX = endX
         headY = endY
         val consumed = step * fraction
         distanceTraveledDp += consumed / state.density
         return consumed
+    }
+
+    /** Slides [recentWindowStart] forward to keep [recentWindowLengthPx] just over
+     *  [SELF_CHECK_EXCLUDE_RECENT_DP] worth of *actual path distance*, not segment
+     *  count. Segment count is not a safe proxy for distance here: a per-frame draw
+     *  budget smaller than [CHORD_DP] (the common case at ordinary speeds and frame
+     *  rates) splits a single logical chord across several frames, each appending its
+     *  own short [LineSegment] — so a fixed *count* of "recent" segments can span a
+     *  wildly different real distance depending on frame timing, and a straight run can
+     *  end up "approaching" a point on itself that is actually still ahead of where a
+     *  real local-curvature exclusion should reach. */
+    private fun updateRecentWindow(state: DrawState, added: LineSegment) {
+        recentWindowLengthPx += hypot(added.endX - added.startX, added.endY - added.startY)
+        val thresholdPx = SELF_CHECK_EXCLUDE_RECENT_DP * state.density
+        while (recentWindowStart < ownSegments.size - 1) {
+            val oldest = ownSegments[recentWindowStart]
+            val oldestLength = hypot(oldest.endX - oldest.startX, oldest.endY - oldest.startY)
+            if (recentWindowLengthPx - oldestLength < thresholdPx) break
+            recentWindowLengthPx -= oldestLength
+            recentWindowStart++
+        }
     }
 
     private fun finish(state: DrawState) {
@@ -345,6 +414,47 @@ class LineGrower(
 
     private enum class Phase { LOOP, NECK }
 
+    /**
+     * Tunes the loop/neck state machine's shape — the growth, clipping, and
+     * self-avoidance mechanics documented on the class above apply identically
+     * regardless of style. [FLOWING] is the seed-growth design's original even mix of
+     * bubbles and blades; [BLOOM] leans hard toward bubbles for [BloomPattern].
+     */
+    data class Style(
+        /** Chance a loop curls into a round bubble bump rather than a tapering blade. */
+        val bubbleProbability: Float = 0.5f,
+        /** Total turn for a bubble bump, in degrees — most of a full loop, so it reads
+         *  as a round bubble rather than a shallow curve. Safe to push this close to
+         *  360 degrees because [safeHeading] (not this angle) is what actually
+         *  guarantees the line never crosses itself. */
+        val bubbleTurnMinDeg: Float = 200f,
+        val bubbleTurnMaxDeg: Float = 300f,
+        /** Distance over which a blade's curvature decays to zero, turning a curl into
+         *  a straightening, pointed hook, in dp. */
+        val bladeLengthMinDp: Float = 55f,
+        val bladeLengthMaxDp: Float = 110f,
+        /** Radius of curvature while looping, in dp — controls how tight or wide the
+         *  bubbles/blades are. */
+        val loopRadiusMinDp: Float = 20f,
+        val loopRadiusMaxDp: Float = 42f,
+        /** Short straight connector between loops — the "pinch" joining one bubble or
+         *  blade to the next, in dp. */
+        val neckMinDp: Float = 8f,
+        val neckMaxDp: Float = 20f,
+        /** Chance consecutive loops curl in opposite directions, so the line snakes
+         *  back and forth rather than spiraling in on itself. */
+        val loopFlipProbability: Float = 0.65f,
+    ) {
+        companion object {
+            /** The seed-growth design's original even mix of bubbles and blades. */
+            val FLOWING = Style()
+
+            /** Heavily biased toward bubbles, with shorter necks so they read as a
+             *  dense cluster of blooms rather than occasional bumps. */
+            val BLOOM = Style(bubbleProbability = 0.85f, neckMinDp = 6f, neckMaxDp = 14f)
+        }
+    }
+
     private companion object {
         /** Length of each straight chord approximating the curve, in dp. */
         const val CHORD_DP = 6f
@@ -355,51 +465,33 @@ class LineGrower(
 
         const val NOISE_FREQUENCY = 0.035f
 
-        /** Chance a loop curls into a round bubble bump rather than a tapering blade. */
-        const val BUBBLE_PROBABILITY = 0.5f
-
-        /** Total turn for a bubble bump — most of a full loop, so it reads as a round
-         *  bubble rather than a shallow curve. Safe to push this close to 360 degrees
-         *  because [safeHeading] (not this angle) is what actually guarantees the line
-         *  never crosses itself. */
-        const val BUBBLE_TURN_MIN_DEG = 200f
-        const val BUBBLE_TURN_MAX_DEG = 300f
-
-        /** Distance over which a blade's curvature decays to zero, turning a curl into
-         *  a straightening, pointed hook. Its cumulative turn is half of what constant
-         *  curvature over the same length would give (the curvature ramps linearly to
-         *  zero), so even at [LOOP_RADIUS_MIN_DP] and this range's max it stays under
-         *  160 degrees — the same never-face-backward safety margin as the bubble. */
-        const val BLADE_LENGTH_MIN_DP = 55f
-        const val BLADE_LENGTH_MAX_DP = 110f
-
-        /** Radius of curvature while looping, in dp — controls how tight or wide the
-         *  bubbles/blades are. */
-        const val LOOP_RADIUS_MIN_DP = 20f
-        const val LOOP_RADIUS_MAX_DP = 42f
-
-        /** Short straight connector between loops — the "pinch" joining one bubble or
-         *  blade to the next. */
-        const val NECK_MIN_DP = 8f
-        const val NECK_MAX_DP = 20f
-
-        /** Chance consecutive loops curl in opposite directions, so the line snakes
-         *  back and forth rather than spiraling in on itself. */
-        const val LOOP_FLIP_PROBABILITY = 0.65f
-
         /** Minimum distance, in dp, a looping chord must keep from any earlier stretch
          *  of this same line (see [wouldApproachOwnPath]). */
-        const val SELF_CLEARANCE_DP = 20f
+        const val SELF_CLEARANCE_DP = 26f
 
-        /** How many of this line's own trailing segments [wouldApproachOwnPath] ignores
-         *  — comfortably more than one full bubble+neck cycle's worth of chords, so the
-         *  check only ever looks at genuinely earlier geometry, not the loop currently
-         *  in progress. */
-        const val SELF_CHECK_EXCLUDE_RECENT = 40
+        /** How much of this line's own trailing *path distance* (dp, not segment count
+         *  — see [updateRecentWindow]) [wouldApproachOwnPath] ignores. This must only
+         *  cover *local* curvature adjacency — two points a short arc apart on the same
+         *  smooth curve are naturally within [SELF_CLEARANCE_DP] of each other, which is
+         *  not a risk. At [SELF_CLEARANCE_DP] = 26dp, two points on an arc of any radius
+         *  in [Style.FLOWING]'s [loopRadiusMinDp][Style.loopRadiusMinDp]..
+         *  [loopRadiusMaxDp][Style.loopRadiusMaxDp] range stay within that distance for
+         *  no more than ~28dp of arc-length, so this only needs a modest safety margin
+         *  above that. It must NOT be large enough to cover a whole bubble (up to ~200dp of arc
+         *  for a wide, nearly-closed loop) — that was the actual bug behind a handful of
+         *  real self-crossings: it hid a loop's closing approach toward its *own start*
+         *  from the safety check entirely, because that start was still within the
+         *  "recent, ignore it" window. */
+        const val SELF_CHECK_EXCLUDE_RECENT_DP = 36f
 
         /** Fraction of [maxLengthDp] at which heading starts blending toward
-         *  [nearestExitPoint] instead of following the loop/neck state machine. */
-        const val APPROACH_FRACTION = 0.9f
+         *  [nearestExitPoint] instead of following the loop/neck state machine. Kept
+         *  well below 1 — not just 0.9 — because by the time a bubble-heavy line is
+         *  that close to its cap it has built up a dense tangle of its own past path,
+         *  and [safeHeading]'s single-chord nudge can occasionally find no clear
+         *  direction left toward the exit (a self-crossing last resort). Starting the
+         *  blend earlier gives it room to head out while the tangle is still sparse. */
+        const val APPROACH_FRACTION = 0.6f
 
         const val MIN_CROSS_FRACTION = 1e-4f
         const val DEGENERATE_PX = 0.5f

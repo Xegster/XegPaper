@@ -41,7 +41,37 @@ enum class PatternType {
     /** Several curves grow at once from the outer perimeter — canvas edges plus lines
      *  already drawn — wandering under Perlin-noise steering and stopping exactly
      *  where they cross existing geometry or the edge. */
-    FLOWING;
+    FLOWING,
+
+    /** One line grows from the perimeter and occasionally forks into two independent
+     *  tips, each carrying its own fixed curvature. See [BranchingLinePattern]. */
+    BRANCHING,
+
+    /** Diffusion-limited aggregation: undirected random walkers stick the instant they
+     *  touch existing geometry. See [AggregationLinePattern]. */
+    AGGREGATION,
+
+    /** Straight cell walls grown along Voronoi-style perpendicular bisectors between
+     *  best-candidate-sampled sites. See [CellularPattern]. */
+    CELLULAR,
+
+    /** [FlowingLinePattern]'s bubble-and-blade growth crossed with [BranchingLinePattern]'s
+     *  forking, biased heavily toward bubbles. See [BloomPattern]. */
+    BLOOM,
+
+    /** Crescents, half-moons, claws and scythe blades, each traced exactly as two arcs
+     *  meeting at sharp horns, seeded from the perimeter like [FLOWING]. See
+     *  [ScytheLinePattern]. */
+    SCYTHE,
+
+    /** A bubble-heavy [FLOWING]-style curve (see [BLOOM]) that occasionally detours
+     *  through a scythe blade and keeps growing from where it ended. See
+     *  [ScytheBubblePattern]. */
+    SCYTHE_BUBBLE,
+
+    /** Scythes chained base-to-base into a zigzag of blades. See
+     *  [MultiScythePattern]. */
+    MULTI_SCYTHE;
 
     companion object {
         fun fromNameOrDefault(name: String?): PatternType =
@@ -53,4 +83,11 @@ fun createPatternGenerator(type: PatternType): PatternGenerator = when (type) {
     PatternType.ANGULAR -> GeometricLinePattern()
     PatternType.RADIAL -> RadialBurstPattern()
     PatternType.FLOWING -> FlowingLinePattern()
+    PatternType.BRANCHING -> BranchingLinePattern()
+    PatternType.AGGREGATION -> AggregationLinePattern()
+    PatternType.CELLULAR -> CellularPattern()
+    PatternType.BLOOM -> BloomPattern()
+    PatternType.SCYTHE -> ScytheLinePattern()
+    PatternType.SCYTHE_BUBBLE -> ScytheBubblePattern()
+    PatternType.MULTI_SCYTHE -> MultiScythePattern()
 }

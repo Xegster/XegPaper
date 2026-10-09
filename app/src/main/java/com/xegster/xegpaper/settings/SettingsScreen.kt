@@ -301,6 +301,13 @@ private val PatternType.displayName: String
         PatternType.ANGULAR -> "Angular walk"
         PatternType.RADIAL -> "Radial burst"
         PatternType.FLOWING -> "Flowing curves"
+        PatternType.BRANCHING -> "Branching"
+        PatternType.AGGREGATION -> "Aggregation"
+        PatternType.CELLULAR -> "Cellular"
+        PatternType.BLOOM -> "Bloom"
+        PatternType.SCYTHE -> "Scythe"
+        PatternType.SCYTHE_BUBBLE -> "Scythe bubble"
+        PatternType.MULTI_SCYTHE -> "Multi-scythe"
     }
 
 private val PatternType.description: String
@@ -313,4 +320,25 @@ private val PatternType.description: String
 
         PatternType.FLOWING ->
             "Curves swell into round bubbles and pinch into pointed blades, seeded from the canvas edge and the lines already drawn, each stopping exactly where it meets existing geometry."
+
+        PatternType.BRANCHING ->
+            "A line grows from the edge and forks into two as it travels, each branch curving gently until it meets other geometry."
+
+        PatternType.AGGREGATION ->
+            "Wandering walkers drift out from the edge on a random walk until they bump into existing lines and stick, like coral or frost forming."
+
+        PatternType.CELLULAR ->
+            "Straight walls grow outward between scattered points, partitioning the canvas into faceted, crystal-like cells."
+
+        PatternType.BLOOM ->
+            "Flowing curves biased heavily toward round bubbles, forking as they grow like a vine blooming and dividing."
+
+        PatternType.SCYTHE ->
+            "Crescent moons, half-moons, claws and scythe blades, each drawn as two arcs meeting at sharp points and stopping where they meet existing lines."
+
+        PatternType.SCYTHE_BUBBLE ->
+            "A curve of round bubbles that occasionally sharpens into a scythe blade for a stretch, then keeps bubbling on from where the blade ended."
+
+        PatternType.MULTI_SCYTHE ->
+            "Scythes chained base to base into a zigzag of alternating blades, curving as it grows."
     }
